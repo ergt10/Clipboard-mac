@@ -33,7 +33,7 @@ enum Snapshot {
         for scheme in [ColorScheme.light, .dark] {
             let view = ContentView(model: model, store: store, staticLayout: true)
                 .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.97))
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: PanelStyle.radius, style: .continuous))
                 .environment(\.colorScheme, scheme)
             let r = ImageRenderer(content: view)
             r.scale = 2

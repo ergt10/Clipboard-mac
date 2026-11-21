@@ -55,14 +55,14 @@ final class PanelController {
         self.store = store
         self.watcher = watcher
         model = PanelModel(store: store)
-        let size = NSSize(width: 800, height: 520)
+        let size = NSSize(width: PanelStyle.width, height: PanelStyle.height)
         panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: size))
 
         let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
         effect.material = .popover
         effect.blendingMode = .behindWindow
         effect.state = .active
-        effect.maskImage = roundedMask(16)
+        effect.maskImage = roundedMask(PanelStyle.radius)
 
         let host = NSHostingView(rootView: ContentView(model: model, store: store))
         host.sizingOptions = []
