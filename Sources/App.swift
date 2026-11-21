@@ -44,16 +44,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupMainMenu()
         setupStatusItem()
         watcher.start()
-        // Ask browsers and Electron apps to expose their caret as soon as they come to the front,
-        // so it is already available when the panel is opened there.
-        if let app = NSWorkspace.shared.frontmostApplication { Caret.prepare(app) }
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { note in
-            if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-                Caret.prepare(app)
-            }
-        }
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | shiftKey)) { [weak self] in
             self?.panel.toggle()
         }
