@@ -178,6 +178,20 @@ struct ContentView: View {
 
     private var footer: some View {
         HStack(spacing: 14) {
+            if !staticLayout {
+                Menu {
+                    Button("清空历史（保留已固定）…") { Entry.delegate.clearHistory() }
+                    Divider()
+                    Button("卸载 ClipNest…") { Entry.delegate.uninstall() }
+                    Button("退出 ClipNest") { Entry.delegate.quit() }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("更多：清空、卸载、退出")
+            }
             if model.axTrusted {
                 Text("\(store.items.count) 条记录")
             } else {
@@ -196,6 +210,7 @@ struct ContentView: View {
             KeyHint(key: "⌘P", label: "固定")
             KeyHint(key: "⌘⌫", label: "删除")
             KeyHint(key: "⇥", label: "分类")
+            KeyHint(key: "⌘Q", label: "退出")
         }
         .font(.system(size: 11))
         .foregroundStyle(.secondary)

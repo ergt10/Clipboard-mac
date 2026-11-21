@@ -31,18 +31,29 @@
 | ⌘⌫ | 删除条目 |
 | ⇥ / ⇧⇥ | 切换分类 |
 | Esc | 清空搜索；再按一次关闭 |
+| ⌘Q | 退出 ClipNest |
 
 双击条目也可粘贴，右键有更多操作。
 
 ## 安装
 
 1. 从 [Releases](https://github.com/ergt10/Clipboard-mac/releases) 下载 `ClipNest.dmg`（或 `ClipNest.zip`），把 ClipNest 拖进“应用程序”。
-2. App 没有 Apple 开发者签名，首次打开会被拦截。任选一种方式放行：
-   - 在 Finder 中右键 ClipNest →“打开”；或
-   - 终端执行 `xattr -dr com.apple.quarantine /Applications/ClipNest.app`。
+2. App 没有 Apple 开发者签名和公证，首次打开会提示“Apple 无法验证……”。任选一种方式放行（只需一次）：
+   - 终端执行 `xattr -dr com.apple.quarantine /Applications/ClipNest.app`，再打开；或
+   - 先双击打开并在提示框点“完成”，然后到“系统设置 → 隐私与安全性”底部点“仍要打开”。
 3. 第一次按回车粘贴时，系统会请求**辅助功能**权限（系统设置 → 隐私与安全性 → 辅助功能，打开 ClipNest）。没有这个权限时，回车只会把内容复制到剪贴板，需要自己按 ⌘V。
 
 需要 macOS 14 或更高版本，支持 Apple 芯片和 Intel。
+
+## 退出与卸载
+
+ClipNest 没有 Dock 图标，退出它的方式有：
+
+- 菜单栏图标 →“退出 ClipNest”；
+- 面板里按 ⌘Q，或点左下角的 ⋯ →“退出 ClipNest”；
+- 菜单栏图标被刘海或其他图标挡住时，在“应用程序”里再双击 ClipNest，会直接弹出面板。
+
+卸载：菜单栏图标或面板左下角 ⋯ →“卸载 ClipNest…”。它会退出、取消登录时启动、把 App 移到废纸篓，并可选择把历史数据（`~/Library/Application Support/ClipNest/`）一起移到废纸篓。
 
 ## 从源码构建
 

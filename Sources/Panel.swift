@@ -126,6 +126,10 @@ final class PanelController {
             break
         }
         guard cmd, let ch = e.charactersIgnoringModifiers?.lowercased() else { return false }
+        if ch == "q" {
+            Entry.delegate.quit()
+            return true
+        }
         if ch == "p" {
             if let it = model.selected(in: model.visible) { model.togglePin(it) }
             return true

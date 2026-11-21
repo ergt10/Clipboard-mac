@@ -114,6 +114,9 @@ final class ClipStore: ObservableObject {
         }
     }
 
+    /// Waits for pending writes; call before quitting.
+    func flush() { io.sync {} }
+
     // MARK: media
 
     func imageURL(_ item: ClipItem) -> URL? {

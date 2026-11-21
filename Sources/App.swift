@@ -85,8 +85,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let clear = NSMenuItem(title: "清空历史（保留已固定）…", action: #selector(clearHistory), keyEquivalent: "")
         clear.target = self
         menu.addItem(clear)
+        let uninstallItem = NSMenuItem(title: "卸载 ClipNest…", action: #selector(uninstall), keyEquivalent: "")
+        uninstallItem.target = self
+        menu.addItem(uninstallItem)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "退出 ClipNest", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "退出 ClipNest", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
         statusItem.menu = menu
     }
 
@@ -113,7 +118,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func clearHistory() {
+    @objc func clearHistory() {
+        panel.hide()
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
         a.messageText = "清空剪贴板历史？"
@@ -121,6 +127,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.addButton(withTitle: "清空")
         a.addButton(withTitle: "取消")
         if a.runModal() == .alertFirstButtonReturn { store.clearUnpinned() }
+    }
+
+    /// Double-clicking the app while it is already running opens the panel,
+    /// so the quit and uninstall commands are reachable even if the menu-bar icon is hidden.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        DispatchQueue.main.async { self.panel.show() }
+        return false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        store.flush()
+    }
+
+    @objc func quit() {
+        panel.hide()
+        NSApp.terminate(nil)
+    }
+
+    /// Quits, removes the login item, and moves the app (and optionally its data) to the Trash.
+    @objc func uninstall() {
+        panel.hide()
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "卸载 ClipNest？"
+        a.informativeText = "ClipNest 会退出、取消登录时启动，并把 App 移到废纸篓。"
+        let keepData = NSButton(checkboxWithTitle: "同时把剪贴板历史数据移到废纸篓", target: nil, action: nil)
+        keepData.state = .on
+        a.accessoryView = keepData
+        a.addButton(withTitle: "卸载")
+        a.addButton(withTitle: "取消")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+
+        watcher.paused = true
+        try? SMAppService.mainApp.unregister()
+        store.flush()
+        var failures: [String] = []
+        let fm = FileManager.default
+        do { try fm.trashItem(at: Bundle.main.bundleURL, resultingItemURL: nil) }
+        catch { failures.append("\(Bundle.main.bundleURL.path)：\(error.localizedDescription)") }
+        if keepData.state == .on, fm.fileExists(atPath: store.baseDir.path) {
+            do { try fm.trashItem(at: store.baseDir, resultingItemURL: nil) }
+            catch { failures.append("\(store.baseDir.path)：\(error.localizedDescription)") }
+        }
+        if !failures.isEmpty {
+            alert("ClipNest 已退出，但有文件没能移到废纸篓", "请手动删除：\n" + failures.joined(separator: "\n"))
+        }
+        NSApp.terminate(nil)
     }
 
     private func alert(_ title: String, _ text: String) {
