@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Carbon.HIToolbox
+import ApplicationServices
 
 final class FloatingPanel: NSPanel {
     var onResign: (() -> Void)?
@@ -81,13 +82,7 @@ final class PanelController {
         model.selection = 0
         model.axTrusted = Paster.isTrusted
 
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
-        if let vf = screen?.visibleFrame {
-            let s = panel.frame.size
-            panel.setFrameOrigin(NSPoint(x: vf.midX - s.width / 2,
-                                         y: vf.midY - s.height / 2 + vf.height * 0.08))
-        }
+        panel.setFrameOrigin(Caret.panelOrigin(for: panel.frame.size))
         panel.makeKeyAndOrderFront(nil)
         panel.invalidateShadow()
         model.focusRequest += 1
@@ -153,5 +148,100 @@ final class PanelController {
         } else {
             Paster.requestTrust()
         }
+    }
+}
+
+/// Finds where the user is typing, so the panel can open right below it.
+enum Caret {
+    /// Panel origin (Cocoa coordinates): below the text caret if the focused app reports it,
+    /// otherwise below the focused text field, otherwise below the mouse pointer.
+    static func panelOrigin(for size: NSSize) -> NSPoint {
+        let gap: CGFloat = 6
+        let anchor = caretRect() ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        let probe = NSPoint(x: anchor.minX, y: anchor.midY)
+        let screen = NSScreen.screens.first { NSMouseInRect(probe, $0.frame, false) } ?? NSScreen.main
+        guard let vf = screen?.visibleFrame else { return anchor.origin }
+
+        var x = anchor.minX - 12
+        var y = anchor.minY - gap - size.height              // below the caret
+        if y < vf.minY { y = anchor.maxY + gap }             // no room below: open above it
+        x = min(max(x, vf.minX + 8), vf.maxX - size.width - 8)
+        y = min(max(y, vf.minY + 8), vf.maxY - size.height - 8)
+        return NSPoint(x: x, y: y)
+    }
+
+    /// The caret (or focused text field) rectangle in Cocoa screen coordinates, via the
+    /// Accessibility API. Returns nil without Accessibility permission or if the app reports nothing.
+    static func caretRect() -> NSRect? {
+        guard AXIsProcessTrusted() else { return nil }
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.25)
+        guard let focused: AXUIElement = copy(system, kAXFocusedUIElementAttribute) else { return nil }
+        AXUIElementSetMessagingTimeout(focused, 0.25)
+
+        if let range: CFRange = rangeValue(copy(focused, kAXSelectedTextRangeAttribute)) {
+            var candidates = [CFRange(location: range.location, length: 0)]
+            if range.location > 0 { candidates.append(CFRange(location: range.location - 1, length: 1)) }
+            for var r in candidates {
+                guard let axRange = AXValueCreate(.cfRange, &r) else { continue }
+                var out: CFTypeRef?
+                guard AXUIElementCopyParameterizedAttributeValue(
+                        focused, kAXBoundsForRangeParameterizedAttribute as CFString, axRange, &out) == .success,
+                      let rect = rectValue(out), rect.height > 0, rect.origin != .zero else { continue }
+                // The character before the caret: the caret sits at its right edge.
+                let caret = r.length == 1 ? CGRect(x: rect.maxX, y: rect.minY, width: 1, height: rect.height) : rect
+                return toCocoa(caret)
+            }
+        }
+
+        // No caret bounds: use the focused element itself if it is a single-line-sized field.
+        if let pos: CGPoint = pointValue(copy(focused, kAXPositionAttribute)),
+           let size: CGSize = sizeValue(copy(focused, kAXSizeAttribute)),
+           size.height > 0, size.height < 120 {
+            return toCocoa(CGRect(origin: pos, size: size))
+        }
+        return nil
+    }
+
+    /// Accessibility uses top-left-origin coordinates measured from the primary screen.
+    private static func toCocoa(_ r: CGRect) -> NSRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return NSRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
+    }
+
+    private static func copy<T>(_ el: AXUIElement, _ attr: String) -> T? {
+        var v: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let v else { return nil }
+        if T.self == AXUIElement.self {
+            guard CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
+            return (v as! T)
+        }
+        return v as? T
+    }
+
+    private static func axValue(_ v: CFTypeRef?, _ type: AXValueType) -> AXValue? {
+        guard let v, CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        let ax = v as! AXValue
+        return AXValueGetType(ax) == type ? ax : nil
+    }
+
+    private static func rangeValue(_ v: CFTypeRef?) -> CFRange? {
+        guard let ax = axValue(v, .cfRange) else { return nil }
+        var r = CFRange(); return AXValueGetValue(ax, .cfRange, &r) ? r : nil
+    }
+
+    private static func rectValue(_ v: CFTypeRef?) -> CGRect? {
+        guard let ax = axValue(v, .cgRect) else { return nil }
+        var r = CGRect.zero; return AXValueGetValue(ax, .cgRect, &r) ? r : nil
+    }
+
+    private static func pointValue(_ v: CFTypeRef?) -> CGPoint? {
+        guard let ax = axValue(v, .cgPoint) else { return nil }
+        var p = CGPoint.zero; return AXValueGetValue(ax, .cgPoint, &p) ? p : nil
+    }
+
+    private static func sizeValue(_ v: CFTypeRef?) -> CGSize? {
+        guard let ax = axValue(v, .cgSize) else { return nil }
+        var s = CGSize.zero; return AXValueGetValue(ax, .cgSize, &s) ? s : nil
     }
 }
