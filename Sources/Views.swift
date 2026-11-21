@@ -7,9 +7,11 @@ enum Filter: String, CaseIterable, Identifiable {
 }
 
 final class PanelModel: ObservableObject {
-    @Published var query = "" { didSet { if oldValue != query { selection = 0 } } }
-    @Published var filter: Filter = .all { didSet { selection = 0 } }
-    @Published var selection = 0
+    @Published var query = "" { didSet { if oldValue != query { selectFirst() } } }
+    @Published var filter: Filter = .all { didSet { if oldValue != filter { selectFirst() } } }
+    /// The selected row is tracked by item id, so pinning, deleting or a new copy
+    /// arriving while the panel is open never moves the selection to another item.
+    @Published var selectedID: UUID?
     @Published var axTrusted = true
     @Published var focusRequest = 0
 
@@ -38,14 +40,21 @@ final class PanelModel: ObservableObject {
         return list.filter(\.pinned) + list.filter { !$0.pinned }
     }
 
+    func selectFirst() { selectedID = visible.first?.id }
+
+    func selectedIndex(in list: [ClipItem]) -> Int? {
+        guard !list.isEmpty else { return nil }
+        return selectedID.flatMap { id in list.firstIndex { $0.id == id } } ?? 0
+    }
+
     func selected(in list: [ClipItem]) -> ClipItem? {
-        list.indices.contains(selection) ? list[selection] : nil
+        selectedIndex(in: list).map { list[$0] }
     }
 
     func move(_ delta: Int) {
-        let n = visible.count
-        guard n > 0 else { return }
-        selection = min(max(selection + delta, 0), n - 1)
+        let list = visible
+        guard let i = selectedIndex(in: list) else { return }
+        selectedID = list[min(max(i + delta, 0), list.count - 1)].id
     }
 
     func cycleFilter(_ step: Int) {
@@ -54,17 +63,27 @@ final class PanelModel: ObservableObject {
         filter = all[(i + step + all.count) % all.count]
     }
 
+    /// ⌘1…⌘9: by visible row number.
     func activate(index: Int, paste: Bool) {
         let list = visible
         guard list.indices.contains(index) else { return }
         onActivate(list[index], paste)
     }
 
+    func activateSelected(paste: Bool) {
+        if let item = selected(in: visible) { onActivate(item, paste) }
+    }
+
     func togglePin(_ item: ClipItem) { store.togglePin(item.id) }
 
     func delete(_ item: ClipItem) {
+        let before = visible
+        let i = before.firstIndex { $0.id == item.id }
         store.delete(item.id)
-        selection = min(selection, max(visible.count - 1, 0))
+        if item.id == selectedID || selectedID == nil, let i {
+            let after = visible
+            selectedID = after.isEmpty ? nil : after[min(i, after.count - 1)].id
+        }
     }
 }
 
@@ -159,20 +178,20 @@ struct ContentView: View {
                     LazyVStack(spacing: 2) { rows(list) }
                         .padding(8)
                 }
-                .onChange(of: model.selection) { _, sel in
-                    let l = model.visible
-                    if l.indices.contains(sel) { proxy.scrollTo(l[sel].id) }
+                .onChange(of: model.selectedID) { _, id in
+                    if let id { proxy.scrollTo(id) }
                 }
             }
         }
     }
 
     private func rows(_ list: [ClipItem]) -> some View {
-        ForEach(Array(list.enumerated()), id: \.element.id) { idx, item in
-            RowView(item: item, index: idx, selected: idx == model.selection, model: model, store: store)
+        let selectedID = model.selected(in: list)?.id
+        return ForEach(Array(list.enumerated()), id: \.element.id) { idx, item in
+            RowView(item: item, index: idx, selected: item.id == selectedID, model: model, store: store)
                 .id(item.id)
-                .onTapGesture(count: 2) { model.activate(index: idx, paste: true) }
-                .simultaneousGesture(TapGesture().onEnded { model.selection = idx })
+                .onTapGesture(count: 2) { model.onActivate(item, true) }
+                .simultaneousGesture(TapGesture().onEnded { model.selectedID = item.id })
         }
     }
 
@@ -182,8 +201,8 @@ struct ContentView: View {
                 Menu {
                     Button("清空历史（保留已固定）…") { Entry.delegate.clearHistory() }
                     Divider()
-                    Button("卸载 ClipNest…") { Entry.delegate.uninstall() }
-                    Button("退出 ClipNest") { Entry.delegate.quit() }
+                    Button("卸载 Clip…") { Entry.delegate.uninstall() }
+                    Button("退出 Clip") { Entry.delegate.quit() }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -317,7 +336,7 @@ struct Thumb: View {
     @ViewBuilder private var base: some View {
         switch item.kind {
         case .image:
-            if let img = store.image(item) {
+            if let img = store.thumbnail(item, maxPixels: 96) {
                 Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
             } else {
                 tile("photo", .purple)
@@ -389,12 +408,21 @@ struct PreviewPane: View {
                         .textSelection(.enabled)
                 }
             } else {
-                let body = Text(String((item.text ?? "").prefix(30_000)))
-                    .font(item.looksLikeCode ? .system(size: 12, design: .monospaced) : .system(size: 13))
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
+                let full = item.text ?? ""
+                let limit = 30_000
+                let body = VStack(alignment: .leading, spacing: 10) {
+                    Text(String(full.prefix(limit)))
+                        .font(item.looksLikeCode ? .system(size: 12, design: .monospaced) : .system(size: 13))
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                    if full.count > limit {
+                        Text("预览只显示前 3 万个字符，粘贴的是完整内容。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
                 if staticLayout {
                     body.frame(maxHeight: .infinity, alignment: .top)
                 } else {
@@ -402,7 +430,7 @@ struct PreviewPane: View {
                 }
             }
         case .image:
-            if let img = store.image(item) {
+            if let img = store.thumbnail(item, maxPixels: 1400) {
                 Image(nsImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)

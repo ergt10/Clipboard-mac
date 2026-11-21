@@ -5,7 +5,7 @@ import SwiftUI
 @MainActor
 enum Snapshot {
     static func render(to dir: String) {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("clipnest-snapshot-\(UUID().uuidString)")
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("clip-snapshot-\(UUID().uuidString)")
         let store = ClipStore(baseDir: tmp)
         func app(_ id: String) -> NSRunningApplication? { nil }
 
@@ -15,21 +15,21 @@ enum Snapshot {
         }
         if let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
            let png = rep.representation(using: .png, properties: [:]) {
-            store.addImage(png: png, width: 1280, height: 800, app: nil)
+            store.addImage(png: png, width: 1280, height: 800, source: ClipSource())
         }
-        store.addFiles([URL(fileURLWithPath: "/Applications/Safari.app")], app: nil)
-        store.addText("#5B8CFF", app: nil)
+        store.addFiles([URL(fileURLWithPath: "/Applications/Safari.app")], source: ClipSource())
+        store.addText("#5B8CFF", source: ClipSource())
         store.addText("""
         func greet(_ name: String) -> String {
             let hour = Calendar.current.component(.hour, from: Date())
             return hour < 12 ? "早上好，\\(name)" : "你好，\\(name)"
         }
-        """, app: nil)
-        store.addText("https://github.com/ergt10/Clipboard-mac", app: nil)
-        store.addText("会议改到周四下午三点，地点在 3 楼大会议室，记得带上季度报告。", app: nil)
+        """, source: ClipSource())
+        store.addText("https://github.com/ergt10/Clipboard-mac", source: ClipSource())
+        store.addText("会议改到周四下午三点，地点在 3 楼大会议室，记得带上季度报告。", source: ClipSource())
 
         let model = PanelModel(store: store)
-        model.selection = 2
+        model.selectedID = store.items[2].id
         for scheme in [ColorScheme.light, .dark] {
             let view = ContentView(model: model, store: store, staticLayout: true)
                 .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.97))

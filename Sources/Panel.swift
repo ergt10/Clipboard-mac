@@ -47,6 +47,8 @@ final class PanelController {
     let model: PanelModel
     private let panel: FloatingPanel
     private var monitor: Any?
+    /// The app that was frontmost when the panel opened; ⌘V is only sent if it is still frontmost.
+    private var targetApp: NSRunningApplication?
 
     init(store: ClipStore, watcher: PasteboardWatcher) {
         self.store = store
@@ -77,9 +79,10 @@ final class PanelController {
     func toggle() { isVisible ? hide() : show() }
 
     func show() {
+        targetApp = NSWorkspace.shared.frontmostApplication
         model.query = ""
         model.filter = .all
-        model.selection = 0
+        model.selectFirst()
         model.axTrusted = Paster.isTrusted
 
         panel.setFrameOrigin(Caret.panelOrigin(for: panel.frame.size))
@@ -105,6 +108,9 @@ final class PanelController {
     }
 
     private func handle(_ e: NSEvent) -> Bool {
+        // While an input method is composing (e.g. Pinyin), keys belong to the search field:
+        // Return confirms the candidate, arrows move between candidates.
+        if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
         let flags = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let cmd = flags.contains(.command)
         switch Int(e.keyCode) {
@@ -114,12 +120,12 @@ final class PanelController {
         case kVK_DownArrow: model.move(1); return true
         case kVK_UpArrow: model.move(-1); return true
         case kVK_Return, kVK_ANSI_KeypadEnter:
-            model.activate(index: model.selection, paste: !cmd)
+            model.activateSelected(paste: !cmd)
             return true
         case kVK_Tab:
             model.cycleFilter(flags.contains(.shift) ? -1 : 1)
             return true
-        case kVK_Delete where cmd:
+        case kVK_Delete where cmd && !e.isARepeat:
             if let it = model.selected(in: model.visible) { model.delete(it) }
             return true
         default:
@@ -143,14 +149,24 @@ final class PanelController {
 
     private func activate(_ item: ClipItem, paste: Bool) {
         hide()
-        Paster.write(item, store: store)
+        guard Paster.write(item, store: store) else {
+            NSSound.beep()
+            return
+        }
         watcher.syncChangeCount()
+        let written = NSPasteboard.general.changeCount
         store.bump(item.id)
         guard paste else { return }
-        if Paster.isTrusted {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { Paster.sendCmdV() }
-        } else {
+        guard Paster.isTrusted else {
             Paster.requestTrust()
+            return
+        }
+        let target = targetApp?.processIdentifier
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            // Only paste if nothing changed in between: same app in front, same pasteboard contents.
+            guard NSPasteboard.general.changeCount == written,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == target else { return }
+            Paster.sendCmdV()
         }
     }
 }
@@ -178,15 +194,17 @@ enum Caret {
     /// Accessibility API. Returns nil without Accessibility permission or if the app reports nothing.
     static func caretRect() -> NSRect? {
         guard AXIsProcessTrusted() else { return nil }
+        // At most ~0.3 s in total, even if the frontmost app is slow to answer.
+        let deadline = Date().addingTimeInterval(0.3)
         let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 0.25)
+        AXUIElementSetMessagingTimeout(system, 0.1)
         guard let focused: AXUIElement = copy(system, kAXFocusedUIElementAttribute) else { return nil }
-        AXUIElementSetMessagingTimeout(focused, 0.25)
+        AXUIElementSetMessagingTimeout(focused, 0.1)
 
         if let range: CFRange = rangeValue(copy(focused, kAXSelectedTextRangeAttribute)) {
             var candidates = [CFRange(location: range.location, length: 0)]
             if range.location > 0 { candidates.append(CFRange(location: range.location - 1, length: 1)) }
-            for var r in candidates {
+            for var r in candidates where Date() < deadline {
                 guard let axRange = AXValueCreate(.cfRange, &r) else { continue }
                 var out: CFTypeRef?
                 guard AXUIElementCopyParameterizedAttributeValue(
@@ -199,7 +217,7 @@ enum Caret {
         }
 
         // No caret bounds: use the focused element itself if it is a single-line-sized field.
-        if let pos: CGPoint = pointValue(copy(focused, kAXPositionAttribute)),
+        if Date() < deadline, let pos: CGPoint = pointValue(copy(focused, kAXPositionAttribute)),
            let size: CGSize = sizeValue(copy(focused, kAXSizeAttribute)),
            size.height > 0, size.height < 120 {
             return toCocoa(CGRect(origin: pos, size: size))

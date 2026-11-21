@@ -1,13 +1,21 @@
 import AppKit
 import Carbon.HIToolbox
 import ApplicationServices
+import ImageIO
 
 final class PasteboardWatcher {
     private let pb = NSPasteboard.general
     private var lastCount: Int
     private var timer: Timer?
     private let store: ClipStore
-    var paused = false
+
+    /// Persisted. On resume, whatever was copied while paused is skipped, not recorded.
+    var paused: Bool {
+        didSet {
+            UserDefaults.standard.set(paused, forKey: "paused")
+            if !paused { syncChangeCount() }
+        }
+    }
 
     // Types that password managers and similar tools set to say "do not record this".
     private let ignoredTypes: Set<String> = [
@@ -17,9 +25,13 @@ final class PasteboardWatcher {
         "com.typeit4me.clipping",
     ]
 
+    /// Images are only recorded up to this many pixels, so decoding them stays cheap.
+    private let maxImagePixels = 40_000_000
+
     init(store: ClipStore) {
         self.store = store
         lastCount = pb.changeCount
+        paused = UserDefaults.standard.bool(forKey: "paused")
     }
 
     func start() {
@@ -27,6 +39,11 @@ final class PasteboardWatcher {
         t.tolerance = 0.1
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
     }
 
     /// Call after we write to the pasteboard ourselves, so it is not recorded again.
@@ -40,42 +57,82 @@ final class PasteboardWatcher {
     }
 
     private func capture() {
-        let types = pb.types ?? []
+        // If the types cannot be read we cannot tell whether the content is marked secret: skip it.
+        guard let types = pb.types, !types.isEmpty else { return }
         if types.contains(where: { ignoredTypes.contains($0.rawValue) }) { return }
-        let app = NSWorkspace.shared.frontmostApplication
+        let source = currentSource()
 
         if let urls = pb.readObjects(forClasses: [NSURL.self],
                                      options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
-            store.addFiles(urls, app: app)
+            store.addFiles(urls, source: source)
             return
         }
         if let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            store.addText(s, app: app)
+            store.addText(s, source: source)
             return
         }
-        if let data = pb.data(forType: .png) ?? pb.data(forType: .tiff),
-           data.count < 40_000_000,
-           let rep = NSBitmapImageRep(data: data) {
-            let png = types.contains(.png) ? data : rep.representation(using: .png, properties: [:])
-            if let png { store.addImage(png: png, width: rep.pixelsWide, height: rep.pixelsHigh, app: app) }
+        captureImage(source: source)
+    }
+
+    private func captureImage(source: ClipSource) {
+        let png = pb.data(forType: .png)
+        guard let data = png ?? pb.data(forType: .tiff), data.count < 40_000_000,
+              let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int,
+              let h = props[kCGImagePropertyPixelHeight] as? Int,
+              w > 0, h > 0, w * h <= maxImagePixels else { return }
+        let pngData: Data
+        if png != nil, CGImageSourceGetType(src) as String? == "public.png" {
+            pngData = data
+        } else {
+            guard let rep = NSBitmapImageRep(data: data),
+                  let converted = rep.representation(using: .png, properties: [:]) else { return }
+            pngData = converted
         }
+        store.addImage(png: pngData, width: w, height: h, source: source)
+    }
+
+    /// The copying app: the `org.nspasteboard.source` marker if the app set one, else the frontmost app.
+    private func currentSource() -> ClipSource {
+        if let id = pb.string(forType: NSPasteboard.PasteboardType("org.nspasteboard.source")), !id.isEmpty {
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
+                return ClipSource(name: app.localizedName, bundleID: id)
+            }
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                return ClipSource(name: FileManager.default.displayName(atPath: url.path)
+                    .replacingOccurrences(of: ".app", with: ""), bundleID: id)
+            }
+        }
+        let app = NSWorkspace.shared.frontmostApplication
+        return ClipSource(name: app?.localizedName, bundleID: app?.bundleIdentifier)
     }
 }
 
 enum Paster {
-    static func write(_ item: ClipItem, store: ClipStore) {
+    /// Puts the item on the pasteboard. Everything is prepared first, so on failure
+    /// (e.g. a missing image file) the current pasteboard is left untouched.
+    @discardableResult
+    static func write(_ item: ClipItem, store: ClipStore) -> Bool {
         let pb = NSPasteboard.general
-        pb.clearContents()
         switch item.kind {
         case .text:
-            pb.setString(item.text ?? "", forType: .string)
+            guard let text = item.text else { return false }
+            pb.clearContents()
+            return pb.setString(text, forType: .string)
         case .file:
-            pb.writeObjects(item.fileURLs as [NSURL])
+            let urls = item.fileURLs
+            guard !urls.isEmpty else { return false }
+            pb.clearContents()
+            return pb.writeObjects(urls as [NSURL])
         case .image:
-            guard let url = store.imageURL(item), let data = try? Data(contentsOf: url) else { return }
+            guard let url = store.imageURL(item), let data = try? Data(contentsOf: url),
+                  let tiff = NSImage(data: data)?.tiffRepresentation else { return false }
+            pb.clearContents()
             pb.declareTypes([.png, .tiff], owner: nil)
-            pb.setData(data, forType: .png)
-            if let tiff = NSImage(data: data)?.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
+            let ok = pb.setData(data, forType: .png)
+            pb.setData(tiff, forType: .tiff)
+            return ok
         }
     }
 

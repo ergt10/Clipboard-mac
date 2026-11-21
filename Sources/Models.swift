@@ -53,7 +53,11 @@ extension ClipItem {
         return NSColor(srgbRed: r, green: g, blue: b, alpha: a)
     }
 
-    var lineCount: Int { (text ?? "").split(whereSeparator: \.isNewline).count }
+    var lineCount: Int {
+        let t = (text ?? "").replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .newlines)
+        return t.isEmpty ? 0 : t.split(separator: "\n", omittingEmptySubsequences: false).count
+    }
 
     var title: String {
         switch kind {

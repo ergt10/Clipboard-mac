@@ -34,6 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var loginItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One copy at a time: two copies would overwrite each other's history file.
+        if let id = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: id)
+               .contains(where: { $0 != NSRunningApplication.current }) {
+            NSApp.terminate(nil)
+            return
+        }
         setupMainMenu()
         setupStatusItem()
         watcher.start()
@@ -47,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "退出 ClipNest", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "退出 Clip", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
 
@@ -65,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let img = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "ClipNest")
+        let img = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Clip")
         img?.isTemplate = true
         statusItem.button?.image = img
 
@@ -85,11 +92,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let clear = NSMenuItem(title: "清空历史（保留已固定）…", action: #selector(clearHistory), keyEquivalent: "")
         clear.target = self
         menu.addItem(clear)
-        let uninstallItem = NSMenuItem(title: "卸载 ClipNest…", action: #selector(uninstall), keyEquivalent: "")
+        let uninstallItem = NSMenuItem(title: "卸载 Clip…", action: #selector(uninstall), keyEquivalent: "")
         uninstallItem.target = self
         menu.addItem(uninstallItem)
         menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "退出 ClipNest", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "退出 Clip", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         statusItem.menu = menu
@@ -150,8 +157,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.hide()
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
-        a.messageText = "卸载 ClipNest？"
-        a.informativeText = "ClipNest 会退出、取消登录时启动，并把 App 移到废纸篓。"
+        a.messageText = "卸载 Clip？"
+        a.informativeText = "Clip 会退出、取消登录时启动，并把 App 移到废纸篓。"
         let keepData = NSButton(checkboxWithTitle: "同时把剪贴板历史数据移到废纸篓", target: nil, action: nil)
         keepData.state = .on
         a.accessoryView = keepData
@@ -159,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.addButton(withTitle: "取消")
         guard a.runModal() == .alertFirstButtonReturn else { return }
 
-        watcher.paused = true
+        watcher.stop()
         try? SMAppService.mainApp.unregister()
         store.flush()
         var failures: [String] = []
@@ -171,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             catch { failures.append("\(store.baseDir.path)：\(error.localizedDescription)") }
         }
         if !failures.isEmpty {
-            alert("ClipNest 已退出，但有文件没能移到废纸篓", "请手动删除：\n" + failures.joined(separator: "\n"))
+            alert("Clip 已退出，但有文件没能移到废纸篓", "请手动删除：\n" + failures.joined(separator: "\n"))
         }
         NSApp.terminate(nil)
     }
