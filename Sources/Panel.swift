@@ -49,6 +49,7 @@ final class PanelController {
     private var monitor: Any?
     /// The app that was frontmost when the panel opened; ⌘V is only sent if it is still frontmost.
     private var targetApp: NSRunningApplication?
+    private var showCount = 0
 
     init(store: ClipStore, watcher: PasteboardWatcher) {
         self.store = store
@@ -83,13 +84,33 @@ final class PanelController {
         model.query = ""
         model.filter = .all
         model.selectFirst()
+        model.lastHoverMouse = NSEvent.mouseLocation
         model.axTrusted = Paster.isTrusted
 
-        panel.setFrameOrigin(Caret.panelOrigin(for: panel.frame.size))
+        if let app = targetApp { Caret.prepare(app) }
+        let caret = Caret.caretRect()
+        panel.setFrameOrigin(Caret.panelOrigin(for: panel.frame.size, anchor: caret))
         panel.makeKeyAndOrderFront(nil)
         panel.invalidateShadow()
         model.focusRequest += 1
         installMonitor()
+
+        // An app that only just started exposing its text fields (see Caret.prepare) may answer
+        // a moment later: retry briefly and move the panel under the caret if it shows up.
+        showCount += 1
+        if caret == nil { retryCaret(show: showCount, delays: [0.15, 0.4]) }
+    }
+
+    private func retryCaret(show: Int, delays: [Double]) {
+        guard let delay = delays.first else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.panel.isVisible, self.showCount == show else { return }
+            if let caret = Caret.caretRect() {
+                self.panel.setFrameOrigin(Caret.panelOrigin(for: self.panel.frame.size, anchor: caret))
+            } else {
+                self.retryCaret(show: show, delays: Array(delays.dropFirst()))
+            }
+        }
     }
 
     func hide() {
@@ -175,9 +196,9 @@ final class PanelController {
 enum Caret {
     /// Panel origin (Cocoa coordinates): below the text caret if the focused app reports it,
     /// otherwise below the focused text field, otherwise below the mouse pointer.
-    static func panelOrigin(for size: NSSize) -> NSPoint {
+    static func panelOrigin(for size: NSSize, anchor caret: NSRect?) -> NSPoint {
         let gap: CGFloat = 6
-        let anchor = caretRect() ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        let anchor = caret ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
         let probe = NSPoint(x: anchor.minX, y: anchor.midY)
         let screen = NSScreen.screens.first { NSMouseInRect(probe, $0.frame, false) } ?? NSScreen.main
         guard let vf = screen?.visibleFrame else { return anchor.origin }
@@ -192,6 +213,29 @@ enum Caret {
 
     /// The caret (or focused text field) rectangle in Cocoa screen coordinates, via the
     /// Accessibility API. Returns nil without Accessibility permission or if the app reports nothing.
+    /// Chromium browsers (Chrome, Edge, Arc, Brave…) and Electron apps only expose their text
+    /// fields and caret to the Accessibility API after a client asks for it. Ask once per process.
+    private static var prepared = Set<pid_t>()
+    private static let chromiumBundlePrefixes = [
+        "com.google.Chrome", "com.microsoft.edgemac", "company.thebrowser.", "com.brave.Browser",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "org.chromium.Chromium",
+    ]
+
+    static func prepare(_ app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        guard AXIsProcessTrusted(), pid != getpid(), !prepared.contains(pid) else { return }
+        prepared.insert(pid)
+        let el = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(el, 0.1)
+        // Electron and recent Chromium: turns on accessibility without other side effects.
+        AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        // Chromium browsers also listen to the attribute VoiceOver sets. Only sent to them,
+        // because some other apps change their window behaviour when it is set.
+        if let id = app.bundleIdentifier, chromiumBundlePrefixes.contains(where: { id.hasPrefix($0) }) {
+            AXUIElementSetAttributeValue(el, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
+    }
+
     static func caretRect() -> NSRect? {
         guard AXIsProcessTrusted() else { return nil }
         // At most ~0.3 s in total, even if the frontmost app is slow to answer.

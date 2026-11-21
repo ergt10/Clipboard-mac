@@ -12,6 +12,16 @@ final class PanelModel: ObservableObject {
     /// The selected row is tracked by item id, so pinning, deleting or a new copy
     /// arriving while the panel is open never moves the selection to another item.
     @Published var selectedID: UUID?
+    /// Mouse position at the last hover-selection. Rows sliding under a still pointer
+    /// (keyboard scrolling) must not steal the selection; only real mouse movement selects.
+    var lastHoverMouse: NSPoint?
+
+    func hoverSelect(_ item: ClipItem) {
+        let p = NSEvent.mouseLocation
+        guard p != lastHoverMouse else { return }
+        lastHoverMouse = p
+        selectedID = item.id
+    }
     @Published var axTrusted = true
     @Published var focusRequest = 0
 
@@ -190,8 +200,7 @@ struct ContentView: View {
         return ForEach(Array(list.enumerated()), id: \.element.id) { idx, item in
             RowView(item: item, index: idx, selected: item.id == selectedID, model: model, store: store)
                 .id(item.id)
-                .onTapGesture(count: 2) { model.onActivate(item, true) }
-                .simultaneousGesture(TapGesture().onEnded { model.selectedID = item.id })
+                .onTapGesture { model.onActivate(item, true) }
         }
     }
 
@@ -295,7 +304,10 @@ struct RowView: View {
                       : (hover ? Color.primary.opacity(0.05) : Color.clear))
         )
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
+        .onHover { inside in
+            hover = inside
+            if inside { model.hoverSelect(item) }
+        }
         .contextMenu {
             Button("粘贴") { model.onActivate(item, true) }
             Button("仅复制") { model.onActivate(item, false) }
